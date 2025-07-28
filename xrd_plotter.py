@@ -78,6 +78,10 @@ class XRDPlotter:
         self.min_intensity_ratio = self.config.get_float('峰值检测参数', 'min_intensity_ratio', 0.05)
         self.peak_detection_distance = self.config.get_int('峰值检测参数', 'peak_detection_distance', 10)
         
+        # 未匹配高峰标注参数
+        self.unmatched_peak_tolerance = self.config.get_float('峰值检测参数', 'unmatched_peak_tolerance', 2.0)
+        self.unmatched_peak_threshold = self.config.get_float('峰值检测参数', 'unmatched_peak_threshold', 0.3)
+        
         # 标注样式
         self.annotation_fontsize = self.config.get_int('标注样式', 'annotation_fontsize', 8)
         self.annotation_offset_y = self.config.get_int('标注样式', 'annotation_offset_y', 50)
@@ -173,9 +177,23 @@ class XRDPlotter:
         return reference_data
     
     def get_data_files(self) -> List[Path]:
-        """获取实验数据文件"""
-        data_files = sorted([f for f in self.script_dir.glob('*.txt') 
-                           if not f.name.startswith('reference_')])
+        """递归搜索当前目录及子目录中的实验数据文件"""
+        data_files = []
+        
+        # 定义要排除的目录
+        excluded_dirs = {'.venv', 'venv', '__pycache__', '.git', 'node_modules', 
+                        'site-packages', '.pytest_cache', '.mypy_cache'}
+        
+        # 递归搜索所有txt文件，排除reference_开头的文件和排除目录
+        for file_path in self.script_dir.rglob('*.txt'):
+            # 检查路径中是否包含排除的目录
+            if any(part in excluded_dirs for part in file_path.parts):
+                continue
+            if not file_path.name.startswith('reference_'):
+                data_files.append(file_path)
+        
+        # 按修改时间排序，最新的文件在前
+        data_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
         return data_files
     
     def select_files_to_plot(self, data_files: List[Path]) -> List[Path]:
@@ -184,9 +202,15 @@ class XRDPlotter:
             print("错误：未找到任何实验数据文件。")
             return []
 
-        print("找到以下实验数据文件:")
+        print("找到以下实验数据文件 (按修改时间排序，最新在前):")
+        import datetime
         for i, file in enumerate(data_files):
-            print(f"  {i + 1}: {file.name}")
+            # 获取相对路径
+            relative_path = file.relative_to(self.script_dir)
+            # 获取文件修改时间
+            mtime = file.stat().st_mtime
+            mod_time = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+            print(f"  {i + 1}: {file.name}  (位置: {relative_path})  [修改: {mod_time}]")
 
         while True:
             try:
@@ -219,9 +243,18 @@ class XRDPlotter:
             print("未找到任何参考文件。")
             return []
             
-        print("\n找到以下参考文件:")
-        for i, file in enumerate(reference_files):
-            print(f"  {i + 1}: {file.name}")
+        print("\n找到以下参考文件 (按修改时间排序):")
+        import datetime
+        # 按修改时间排序参考文件
+        reference_files_sorted = sorted(reference_files, key=lambda x: x.stat().st_mtime, reverse=True)
+        
+        for i, file in enumerate(reference_files_sorted):
+            # 获取相对路径
+            relative_path = file.relative_to(self.script_dir)
+            # 获取文件修改时间
+            mtime = file.stat().st_mtime
+            mod_time = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+            print(f"  {i + 1}: {file.name}  (位置: {relative_path})  [修改: {mod_time}]")
         
         while True:
             try:
@@ -229,7 +262,7 @@ class XRDPlotter:
                 if not choice:
                     continue
                 if choice == 'all':
-                    return reference_files
+                    return reference_files_sorted
                 if choice == 'none':
                     return []
 
@@ -238,8 +271,8 @@ class XRDPlotter:
                 selected_files = []
                 valid_selection = True
                 for i in indices:
-                    if 0 <= i < len(reference_files):
-                        selected_files.append(reference_files[i])
+                    if 0 <= i < len(reference_files_sorted):
+                        selected_files.append(reference_files_sorted[i])
                     else:
                         print(f"错误：编号 {i + 1} 无效。")
                         valid_selection = False
@@ -334,7 +367,71 @@ class XRDPlotter:
                     'count': len(phase_matches)
                 }
         
+        # 识别未匹配的高强度峰值
+        unmatched_peaks = self.find_unmatched_high_peaks(peak_info, used_peak_indices, reference_data)
+        if unmatched_peaks:
+            matches['未知相'] = {
+                'matches': unmatched_peaks,
+                'symbol': '?',
+                'count': len(unmatched_peaks)
+            }
+        
         return matches
+    
+    def find_unmatched_high_peaks(self, peak_info: List, used_peak_indices: set, reference_data: Dict) -> List:
+        """识别未匹配但足够高的峰值，使用更大的容差进行标注"""
+        unmatched_peaks = []
+        max_intensity = max(peak_info, key=lambda x: x[1])[1] if peak_info else 0
+        
+        for angle, intensity, idx in peak_info:
+            # 跳过已经匹配的峰
+            if idx in used_peak_indices:
+                continue
+            
+            # 只考虑强度足够高的峰值
+            intensity_ratio = intensity / max_intensity if max_intensity > 0 else 0
+            if intensity_ratio < self.unmatched_peak_threshold:
+                continue
+            
+            # 检查是否在更大容差范围内存在参考峰
+            is_near_reference = False
+            closest_ref_angle = None
+            min_diff = float('inf')
+            
+            for phase_name, ref_data in reference_data.items():
+                for ref_angle in ref_data['two_theta']:
+                    angle_diff = abs(angle - ref_angle)
+                    if angle_diff <= self.unmatched_peak_tolerance:
+                        is_near_reference = True
+                        if angle_diff < min_diff:
+                            min_diff = angle_diff
+                            closest_ref_angle = ref_angle
+                        break
+                if is_near_reference:
+                    break
+            
+            # 如果在大容差范围内找到参考峰，标记为可能的匹配
+            if is_near_reference:
+                unmatched_peaks.append({
+                    'exp_angle': angle,
+                    'ref_angle': closest_ref_angle,
+                    'intensity': intensity,
+                    'diff': min_diff,
+                    'peak_idx': idx,
+                    'type': '可能匹配'
+                })
+            else:
+                # 完全未知的峰
+                unmatched_peaks.append({
+                    'exp_angle': angle,
+                    'ref_angle': None,
+                    'intensity': intensity,
+                    'diff': 0,
+                    'peak_idx': idx,
+                    'type': '未知峰'
+                })
+        
+        return unmatched_peaks
     
     def add_peak_annotations(self, ax, matches: Dict):
         """在图上添加峰值标注"""
@@ -354,7 +451,15 @@ class XRDPlotter:
                 y = match['intensity']
                 annotation_y = y + self.annotation_offset_y + (i * 20)
                 
-                annotation_text = f"{display_symbol} {phase_name}\n{x:.2f}°"
+                # 为未知相提供特殊的标注格式
+                if phase_name == '未知相':
+                    match_type = match.get('type', '未知峰')
+                    if match_type == '可能匹配':
+                        annotation_text = f"{display_symbol} 可能匹配\n{x:.2f}° (偏差:{match['diff']:.2f}°)"
+                    else:
+                        annotation_text = f"{display_symbol} 未知峰\n{x:.2f}°"
+                else:
+                    annotation_text = f"{display_symbol} {phase_name}\n{x:.2f}°"
                 
                 ax.annotate(annotation_text,
                            xy=(x, y),
@@ -471,6 +576,8 @@ class XRDPlotter:
         print(f"  - 峰间距: {self.peak_detection_distance} 点")
         print(f"  - 字体: {self.config.get_current_font()}")
         print(f"  - 符号组: {' '.join(self.config.get_current_symbols())}")
+        print(f"  - 未匹配峰容差: ±{self.unmatched_peak_tolerance}°")
+        print(f"  - 未匹配峰阈值: {self.unmatched_peak_threshold*100:.1f}%")
         
         # 获取要绘制的文件
         data_files = self.get_data_files()

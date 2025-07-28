@@ -22,55 +22,140 @@ class PDFCardProcessor:
     def search_for_files(self, search_path='.'):
         """在指定路径下递归搜索所有的.txt文件"""
         found_files = []
+        search_path = Path(search_path)
         print(f"\n正在路径 '{search_path}' 及其所有子文件夹中搜索 .txt 文件...")
         
-        for dirpath, _, filenames in os.walk(search_path):
-            for filename in filenames:
-                if filename.endswith('.txt') and not filename.startswith('reference_'):
-                    full_path = os.path.join(dirpath, filename)
-                    found_files.append(full_path)
+        # 定义要排除的目录
+        excluded_dirs = {'.venv', 'venv', '__pycache__', '.git', 'node_modules', 
+                        'site-packages', '.pytest_cache', '.mypy_cache'}
         
-        return found_files
+        # 使用Path.rglob递归搜索
+        for file_path in search_path.rglob('*.txt'):
+            # 检查路径中是否包含排除的目录
+            if any(part in excluded_dirs for part in file_path.parts):
+                continue
+            if not file_path.name.startswith('reference_'):
+                found_files.append(file_path)
+        
+        # 按修改时间排序，最新的文件在前
+        found_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        return [str(f.resolve()) for f in found_files]
     
     def get_local_card_files(self):
-        """获取当前目录下的卡片文件"""
-        found_files = [os.path.abspath(f) for f in os.listdir(self.script_dir) 
-                      if f.endswith('.txt') and not f.startswith('reference_')]
-        return found_files
+        """获取当前目录及子目录下的卡片文件"""
+        found_files = []
+        
+        # 定义要排除的目录
+        excluded_dirs = {'.venv', 'venv', '__pycache__', '.git', 'node_modules', 
+                        'site-packages', '.pytest_cache', '.mypy_cache'}
+        
+        # 递归搜索所有txt文件，排除reference_开头的文件和排除目录
+        for file_path in self.script_dir.rglob('*.txt'):
+            # 检查路径中是否包含排除的目录
+            if any(part in excluded_dirs for part in file_path.parts):
+                continue
+            if not file_path.name.startswith('reference_'):
+                found_files.append(file_path)
+        
+        # 按修改时间排序，最新的文件在前
+        found_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        return [str(f.resolve()) for f in found_files]
     
     def select_file_from_list(self, file_list):
-        """提供文件列表让用户选择"""
+        """提供文件列表让用户选择，或者允许直接输入文件路径"""
         if not file_list:
-            return None
+            return self.get_direct_file_path()
         
         print("\n--- 文件选择 ---")
-        print("请从以下找到的文件中选择一个进行处理:")
+        print("请从以下找到的文件中选择一个进行处理 (按修改时间排序，最新在前):")
+        
         for i, filepath in enumerate(file_list, 1):
-            print(f"  [{i}] {os.path.basename(filepath)}  (位于: {os.path.dirname(filepath)})")
+            relative_path = os.path.relpath(filepath, self.script_dir)
+            # 获取文件修改时间
+            file_path_obj = Path(filepath)
+            mtime = file_path_obj.stat().st_mtime
+            import datetime
+            mod_time = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+            print(f"  [{i}] {os.path.basename(filepath)}  (位置: {relative_path})  [修改: {mod_time}]")
+        
+        print(f"  [0] 手动输入文件路径")
         
         while True:
             try:
-                choice = int(input(f"请输入您的选择 (1-{len(file_list)}): "))
-                if 1 <= choice <= len(file_list):
-                    return file_list[choice - 1]
+                choice = input(f"请输入您的选择 (0-{len(file_list)}): ")
+                
+                if choice == '0':
+                    return self.get_direct_file_path()
+                
+                choice_num = int(choice)
+                if 1 <= choice_num <= len(file_list):
+                    return file_list[choice_num - 1]
                 else:
-                    print(f"[提示] 无效选择，请输入1到{len(file_list)}之间的数字。")
+                    print(f"[提示] 无效选择，请输入0到{len(file_list)}之间的数字。")
             except ValueError:
                 print("[错误] 请输入一个有效的数字。")
     
-    def get_search_path(self):
-        """引导用户提供搜索路径"""
-        print("\n[提示] 未在当前目录找到卡片文件。进入高级搜索模式。")
-        print("您可以提供一个文件夹路径，程序将在那里进行深度搜索。")
+    def get_direct_file_path(self):
+        """允许用户直接输入文件路径"""
+        print("\n--- 手动输入文件路径 ---")
+        print("您可以输入完整的文件路径，或者相对于当前目录的路径")
         
         while True:
-            path = input("请输入要搜索的文件夹路径 (直接回车则退出程序): ")
-            if not path:
+            file_path = input("请输入文件路径 (直接回车返回文件列表): ").strip()
+            
+            if not file_path:
                 return None
-            if os.path.isdir(path):
-                return path
+            
+            # 尝试解析路径
+            path_obj = Path(file_path)
+            
+            # 如果是相对路径，相对于脚本目录
+            if not path_obj.is_absolute():
+                path_obj = self.script_dir / path_obj
+            
+            # 检查文件是否存在
+            if path_obj.exists() and path_obj.is_file():
+                if path_obj.suffix.lower() == '.txt':
+                    if not path_obj.name.startswith('reference_'):
+                        print(f"[成功] 找到文件: {path_obj}")
+                        return str(path_obj.resolve())
+                    else:
+                        print("[错误] 不能选择reference_开头的参考文件。")
+                else:
+                    print("[错误] 请选择.txt格式的文件。")
             else:
-                print("[错误] 您输入的不是一个有效的文件夹路径，请检查后重试。")
+                print(f"[错误] 文件不存在: {file_path}")
+                print("请检查路径是否正确。")
+    
+    def get_search_path(self):
+        """引导用户提供搜索路径或直接输入文件路径"""
+        print("\n[提示] 未在当前目录及子目录找到卡片文件。")
+        print("您可以:")
+        print("  1. 提供一个文件夹路径进行深度搜索")
+        print("  2. 直接输入具体的文件路径")
+        
+        while True:
+            path_input = input("请输入文件夹路径或文件路径 (直接回车则退出程序): ").strip()
+            if not path_input:
+                return None
+            
+            path_obj = Path(path_input)
+            
+            # 如果是相对路径，相对于脚本目录
+            if not path_obj.is_absolute():
+                path_obj = self.script_dir / path_obj
+            
+            if path_obj.is_dir():
+                print(f"[信息] 将在目录 '{path_obj}' 中搜索文件...")
+                return str(path_obj)
+            elif path_obj.is_file():
+                if path_obj.suffix.lower() == '.txt' and not path_obj.name.startswith('reference_'):
+                    print(f"[成功] 直接使用文件: {path_obj}")
+                    return str(path_obj)  # 返回文件路径，run方法中需要特殊处理
+                else:
+                    print("[错误] 请选择.txt格式的非reference_文件。")
+            else:
+                print("[错误] 您输入的路径无效，请检查后重试。")
     
     def select_symbol(self):
         """选择标注符号"""
@@ -213,26 +298,38 @@ class PDFCardProcessor:
         print("   XRD PDF卡片智能数据清洗与提取工具")
         print("========================================")
         
-        # 查找文件
+        # 首先在当前目录及子目录查找文件
         found_files = self.get_local_card_files()
+        selected_filepath = None
         
-        if not found_files:
-            search_path = self.get_search_path()
-            if not search_path:
+        if found_files:
+            print(f"\n[信息] 在当前目录及子目录中找到 {len(found_files)} 个卡片文件")
+            selected_filepath = self.select_file_from_list(found_files)
+        else:
+            # 如果没有找到文件，让用户输入搜索路径或直接文件路径
+            search_input = self.get_search_path()
+            if not search_input:
                 print("\n程序已退出。")
                 return False
-            found_files = self.search_for_files(search_path)
+            
+            # 检查输入是文件还是目录
+            path_obj = Path(search_input)
+            if path_obj.is_file():
+                # 直接使用该文件
+                selected_filepath = search_input
+            else:
+                # 在指定目录搜索文件
+                found_files = self.search_for_files(search_input)
+                if not found_files:
+                    print("\n[最终结果] 未能找到任何卡片文件。程序已退出。")
+                    return False
+                selected_filepath = self.select_file_from_list(found_files)
         
-        if not found_files:
-            print("\n[最终结果] 未能找到任何卡片文件。程序已退出。")
-            return False
-        
-        # 选择文件和参数
-        selected_filepath = self.select_file_from_list(found_files)
         if not selected_filepath:
             print("\n程序已退出。")
             return False
         
+        # 选择参数
         symbol = self.select_symbol()
         intensity_threshold = self.get_intensity_threshold()
         
