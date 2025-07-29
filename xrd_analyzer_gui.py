@@ -19,6 +19,7 @@ import threading
 import json
 from datetime import datetime
 from typing import Optional, List, Dict, Any
+from config_manager_gui import ConfigManager
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -44,6 +45,9 @@ class XRDAnalyzerGUI:
         self.root.geometry("1400x900")
         self.root.minsize(1200, 800)
         
+        # 初始化配置管理器
+        self.config_manager = ConfigManager()
+        
         # 数据存储 - 添加类型注解
         self.exp_data: Optional[pd.DataFrame] = None
         self.pdf_data: List[pd.DataFrame] = []
@@ -52,44 +56,55 @@ class XRDAnalyzerGUI:
         self.exp_file_path: Optional[str] = None
         self.pdf_file_paths: List[str] = []
         
-        # 配置参数
-        self.config = {
-            # 峰检测参数
-            'peak_height': tk.DoubleVar(value=100),
-            'peak_distance': tk.IntVar(value=15),
-            'peak_prominence': tk.DoubleVar(value=50),
-            'peak_width': tk.DoubleVar(value=2),
-            'match_tolerance': tk.DoubleVar(value=0.2),
-            
-            # 显示参数
-            'figure_width': tk.DoubleVar(value=16),
-            'figure_height': tk.DoubleVar(value=8),
-            'line_width': tk.DoubleVar(value=1.2),
-            'marker_size': tk.DoubleVar(value=10),
-            'font_size': tk.IntVar(value=12),
-            'title_size': tk.IntVar(value=18),
-            
-            # 颜色设置
-            'exp_data_color': tk.StringVar(value='black'),
-            'unmatched_color': tk.StringVar(value='red'),
-            'grid_alpha': tk.DoubleVar(value=0.4),
-            'legend_alpha': tk.DoubleVar(value=0.9),
-            
-            # 数据处理参数
-            'intensity_threshold': tk.DoubleVar(value=0),
-            'angle_min': tk.DoubleVar(value=10),
-            'angle_max': tk.DoubleVar(value=70),
-            'smooth_window': tk.IntVar(value=1),
-            
-            # 输出设置
-            'save_dpi': tk.IntVar(value=300),
-            'auto_save': tk.BooleanVar(value=True),
-            'show_statistics': tk.BooleanVar(value=True),
-            'show_unmatched': tk.BooleanVar(value=True)
-        }
+        # 从配置文件加载配置参数
+        self.init_config_from_file()
         
         self.create_widgets()
         self.setup_layout()
+        
+        # 设置窗口关闭时的回调
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+    def init_config_from_file(self):
+        """从配置文件初始化配置参数"""
+        # 加载配置文件中的数值
+        config_data = self.config_manager.load_config()
+        
+        # 配置参数 - 使用配置文件中的值
+        self.config = {
+            # 峰检测参数
+            'peak_height': tk.DoubleVar(value=config_data.get('peak_height', 100)),
+            'peak_distance': tk.IntVar(value=config_data.get('peak_distance', 15)),
+            'peak_prominence': tk.DoubleVar(value=config_data.get('peak_prominence', 50)),
+            'peak_width': tk.DoubleVar(value=config_data.get('peak_width', 2)),
+            'match_tolerance': tk.DoubleVar(value=config_data.get('match_tolerance', 0.2)),
+            
+            # 显示参数
+            'figure_width': tk.DoubleVar(value=config_data.get('figure_width', 16)),
+            'figure_height': tk.DoubleVar(value=config_data.get('figure_height', 8)),
+            'line_width': tk.DoubleVar(value=config_data.get('line_width', 1.2)),
+            'marker_size': tk.DoubleVar(value=config_data.get('marker_size', 10)),
+            'font_size': tk.IntVar(value=config_data.get('font_size', 12)),
+            'title_size': tk.IntVar(value=config_data.get('title_size', 18)),
+            
+            # 颜色设置
+            'exp_data_color': tk.StringVar(value=config_data.get('exp_data_color', 'black')),
+            'unmatched_color': tk.StringVar(value=config_data.get('unmatched_color', 'red')),
+            'grid_alpha': tk.DoubleVar(value=config_data.get('grid_alpha', 0.4)),
+            'legend_alpha': tk.DoubleVar(value=config_data.get('legend_alpha', 0.9)),
+            
+            # 数据处理参数
+            'intensity_threshold': tk.DoubleVar(value=config_data.get('intensity_threshold', 0)),
+            'angle_min': tk.DoubleVar(value=config_data.get('angle_min', 10)),
+            'angle_max': tk.DoubleVar(value=config_data.get('angle_max', 70)),
+            'smooth_window': tk.IntVar(value=config_data.get('smooth_window', 1)),
+            
+            # 输出设置
+            'save_dpi': tk.IntVar(value=config_data.get('save_dpi', 300)),
+            'auto_save': tk.BooleanVar(value=config_data.get('auto_save', True)),
+            'show_statistics': tk.BooleanVar(value=config_data.get('show_statistics', True)),
+            'show_unmatched': tk.BooleanVar(value=config_data.get('show_unmatched', True))
+        }
         
     def create_widgets(self):
         """创建界面组件"""
@@ -387,6 +402,7 @@ class XRDAnalyzerGUI:
         ttk.Button(btn_frame, text="开始分析", command=self.start_analysis, 
                   style="Accent.TButton").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(btn_frame, text="清除数据", command=self.clear_data).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="导出报告", command=self.export_match_report).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="保存配置", command=self.save_config).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="加载配置", command=self.load_config).pack(side=tk.LEFT, padx=5)
         
@@ -773,6 +789,164 @@ class XRDAnalyzerGUI:
             for phase, count in phase_stats.items():
                 percentage = count / len(self.matched_peaks) * 100
                 self.log_message(f"  {phase}: {count} 个峰 ({percentage:.1f}%)")
+            
+            # 生成详细匹配报告
+            self.generate_match_report()
+                
+    def generate_match_report(self):
+        """生成详细的匹配结果报告"""
+        try:
+            if self.matched_peaks is None or len(self.matched_peaks) == 0:
+                self.log_message("没有匹配数据可导出", "WARNING")
+                return
+            
+            # 确定输出文件路径
+            if self.exp_file_path:
+                output_dir = os.path.dirname(self.exp_file_path)
+                base_name = os.path.splitext(os.path.basename(self.exp_file_path))[0]
+            else:
+                output_dir = os.getcwd()
+                base_name = "xrd_analysis"
+            
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_path = os.path.join(output_dir, f"{base_name}_匹配报告_{timestamp}.txt")
+            
+            self.save_detailed_report(report_path)
+            self.log_message(f"匹配报告已保存到: {report_path}")
+            
+        except Exception as e:
+            self.log_message(f"生成匹配报告失败: {str(e)}", "ERROR")
+                
+    def export_match_report(self):
+        """手动导出匹配报告按钮回调"""
+        if self.matched_peaks is None or len(self.matched_peaks) == 0:
+            messagebox.showwarning("警告", "没有匹配数据可导出，请先进行分析。")
+            return
+        
+        # 询问用户保存位置
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if self.exp_file_path:
+            base_name = os.path.splitext(os.path.basename(self.exp_file_path))[0]
+            default_name = f"{base_name}_匹配报告_{timestamp}.txt"
+            initial_dir = os.path.dirname(self.exp_file_path)
+        else:
+            default_name = f"xrd_analysis_匹配报告_{timestamp}.txt"
+            initial_dir = os.getcwd()
+        
+        file_path = filedialog.asksaveasfilename(
+            title="保存匹配报告",
+            defaultextension=".txt",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
+            initialfile=default_name,
+            initialdir=initial_dir
+        )
+        
+        if file_path:
+            try:
+                self.save_detailed_report(file_path)
+                self.log_message(f"匹配报告已保存到: {file_path}")
+                messagebox.showinfo("成功", f"匹配报告已保存到:\n{file_path}")
+            except Exception as e:
+                error_msg = f"保存报告失败: {str(e)}"
+                self.log_message(error_msg, "ERROR")
+                messagebox.showerror("错误", error_msg)
+                
+    def save_detailed_report(self, file_path: str):
+        """保存详细匹配报告到指定文件"""
+        if self.matched_peaks is None or len(self.matched_peaks) == 0:
+            raise ValueError("没有匹配数据可导出")
+            
+        with open(file_path, 'w', encoding='utf-8') as f:
+            # 写入报告头部
+            f.write("=" * 80 + "\n")
+            f.write("XRD峰匹配分析详细报告\n")
+            f.write("=" * 80 + "\n")
+            f.write(f"生成时间: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}\n")
+            if self.exp_file_path:
+                f.write(f"实验数据文件: {os.path.basename(self.exp_file_path)}\n")
+            f.write(f"匹配容差: ±{self.config['match_tolerance'].get():.3f}°\n")
+            f.write(f"总检测峰数: {len(self.found_peaks) if self.found_peaks is not None else 0}\n")
+            f.write(f"成功匹配峰数: {len(self.matched_peaks)}\n")
+            if self.found_peaks is not None and len(self.found_peaks) > 0:
+                success_rate = len(self.matched_peaks)/len(self.found_peaks)*100
+                f.write(f"匹配成功率: {success_rate:.1f}%\n")
+            else:
+                f.write(f"匹配成功率: 无法计算\n")
+            f.write("\n")
+            
+            # 按物相分组统计
+            phase_stats = self.matched_peaks['match'].apply(lambda x: x['phase']).value_counts()
+            f.write("各物相匹配统计:\n")
+            f.write("-" * 40 + "\n")
+            for phase, count in phase_stats.items():
+                percentage = count / len(self.matched_peaks) * 100
+                f.write(f"{phase}: {count} 个峰 ({percentage:.1f}%)\n")
+            f.write("\n")
+            
+            # 详细匹配结果表格
+            f.write("详细匹配结果对照表:\n")
+            f.write("=" * 120 + "\n")
+            f.write(f"{'序号':<4} {'物相名称':<15} {'符号':<4} {'实验峰位(°)':<12} {'PDF峰位(°)':<12} {'误差(°)':<10} {'实验强度':<12} {'PDF强度':<10} {'匹配度':<8}\n")
+            f.write("-" * 120 + "\n")
+            
+            # 按物相和峰位置排序
+            sorted_matches = self.matched_peaks.sort_values('2theta')
+            
+            for i, (idx, peak) in enumerate(sorted_matches.iterrows(), 1):
+                match_info = peak['match']
+                exp_2theta = peak['2theta']
+                pdf_2theta = match_info['2theta']
+                error = abs(exp_2theta - pdf_2theta)
+                exp_intensity = peak['intensity']
+                pdf_intensity = match_info['intensity']
+                match_quality = match_info['match_quality']
+                phase = match_info['phase']
+                symbol = match_info['symbol']
+                
+                f.write(f"{i:<4} {phase:<15} {symbol:<4} {exp_2theta:<12.3f} {pdf_2theta:<12.3f} "
+                       f"{error:<10.3f} {exp_intensity:<12.0f} {pdf_intensity:<10.0f} {match_quality:<8.3f}\n")
+            
+            f.write("-" * 120 + "\n")
+            f.write("\n")
+            
+            # 按物相分组的详细信息
+            f.write("按物相分组的详细信息:\n")
+            f.write("=" * 80 + "\n")
+            
+            for phase in phase_stats.index:
+                phase_peaks = sorted_matches[sorted_matches['match'].apply(lambda x: x['phase']) == phase]
+                symbol = phase_peaks.iloc[0]['match']['symbol']
+                
+                f.write(f"\n{symbol} {phase} ({len(phase_peaks)} 个峰):\n")
+                f.write("-" * 60 + "\n")
+                f.write(f"{'峰序号':<6} {'实验峰位(°)':<12} {'PDF峰位(°)':<12} {'误差(°)':<10} {'匹配度':<8}\n")
+                f.write("-" * 60 + "\n")
+                
+                for j, (idx, peak) in enumerate(phase_peaks.iterrows(), 1):
+                    match_info = peak['match']
+                    exp_2theta = peak['2theta']
+                    pdf_2theta = match_info['2theta']
+                    error = abs(exp_2theta - pdf_2theta)
+                    match_quality = match_info['match_quality']
+                    
+                    f.write(f"{j:<6} {exp_2theta:<12.3f} {pdf_2theta:<12.3f} {error:<10.3f} {match_quality:<8.3f}\n")
+            
+            # 统计摘要
+            f.write(f"\n\n统计摘要:\n")
+            f.write("=" * 40 + "\n")
+            errors = [abs(peak['2theta'] - peak['match']['2theta']) for _, peak in sorted_matches.iterrows()]
+            qualities = [peak['match']['match_quality'] for _, peak in sorted_matches.iterrows()]
+            
+            f.write(f"平均误差: {np.mean(errors):.4f}°\n")
+            f.write(f"最大误差: {np.max(errors):.4f}°\n")
+            f.write(f"最小误差: {np.min(errors):.4f}°\n")
+            f.write(f"误差标准差: {np.std(errors):.4f}°\n")
+            f.write(f"平均匹配度: {np.mean(qualities):.4f}\n")
+            f.write(f"最高匹配度: {np.max(qualities):.4f}\n")
+            f.write(f"最低匹配度: {np.min(qualities):.4f}\n")
+            
+            f.write(f"\n生成完成时间: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}\n")
+            f.write("=" * 80 + "\n")
                 
     def update_plot(self):
         """更新图表显示"""
@@ -917,16 +1091,48 @@ class XRDAnalyzerGUI:
             file_path = filedialog.asksaveasfilename(
                 title="保存配置文件",
                 defaultextension=".json",
-                filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
+                filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")],
+                initialfile="xrd_config.json"
             )
             
             if file_path:
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    json.dump(config_data, f, indent=2, ensure_ascii=False)
-                self.log_message(f"配置已保存到: {file_path}")
+                # 使用ConfigManager保存配置
+                if self.config_manager.save_config(config_data):
+                    # 同时保存到用户指定的位置
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        json.dump(config_data, f, indent=2, ensure_ascii=False)
+                    self.log_message(f"配置已保存到: {file_path}")
+                else:
+                    self.log_message("保存到默认配置文件失败", "WARNING")
                 
         except Exception as e:
             messagebox.showerror("错误", f"保存配置失败: {str(e)}")
+            
+    def auto_save_config(self):
+        """自动保存配置到默认文件"""
+        try:
+            config_data = {}
+            for key, var in self.config.items():
+                config_data[key] = var.get()
+            
+            if self.config_manager.save_config(config_data):
+                self.log_message("配置已自动保存")
+            else:
+                self.log_message("自动保存配置失败", "WARNING")
+                
+        except Exception as e:
+            self.log_message(f"自动保存配置失败: {str(e)}", "ERROR")
+            
+    def on_closing(self):
+        """窗口关闭时的回调函数"""
+        try:
+            # 自动保存配置
+            self.auto_save_config()
+        except Exception as e:
+            print(f"关闭时保存配置失败: {e}")
+        finally:
+            # 关闭窗口
+            self.root.destroy()
             
     def load_config(self):
         """加载配置"""
